@@ -1,0 +1,97 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# MERIDIAN HEALTH SYSTEMS — CAPSTONE EXAMINATION LAB
+# M.Sc. Penetration Testing — Final Assessment
+#
+# Bring the whole environment up with:
+#     docker compose up -d
+# The AD domain provisions on first boot (allow ~3 minutes).
+# Verify with: ./scripts/healthcheck.sh
+#
+# Network: 10.10.20.0/24  (separate from the teaching lab's 10.10.10.0/24)
+# ═══════════════════════════════════════════════════════════════════════════════
+services:
+
+  # ── Patient Portal (main web target) ─────────────────────────────────────────
+  meridian-web:
+    build: ./web-app
+    container_name: meridian-web
+    hostname: meridian-web
+    ports:
+      - "80:80"                       # http://localhost
+    networks:
+      meridian-net:
+        ipv4_address: 10.10.20.10
+    restart: unless-stopped
+
+  # ── Internal API (NoSQL injection) ───────────────────────────────────────────
+  meridian-api:
+    build: ./api-service
+    container_name: meridian-api
+    hostname: api
+    ports:
+      - "8081:80"                     # http://localhost:8081  (also reachable via SSRF at 10.10.20.11)
+    networks:
+      meridian-net:
+        ipv4_address: 10.10.20.11
+    restart: unless-stopped
+
+  # ── MediBot AI assistant (LLM prompt injection) ──────────────────────────────
+  meridian-chatbot:
+    build: ./chatbot
+    container_name: meridian-chatbot
+    hostname: chatbot
+    ports:
+      - "8082:80"                     # http://localhost:8082
+    networks:
+      meridian-net:
+        ipv4_address: 10.10.20.12
+    restart: unless-stopped
+
+  # ── Cloud metadata simulator (SSRF-only, no host port) ───────────────────────
+  meridian-cloud-meta:
+    build: ./cloud-meta
+    container_name: meridian-cloud-meta
+    hostname: cloud-meta
+    networks:
+      meridian-net:
+        ipv4_address: 10.10.20.80     # reachable ONLY via portal SSRF (/labresult?url=)
+    restart: unless-stopped
+
+  # ── Active Directory Domain Controller (internal pivot) ──────────────────────
+  meridian-dc:
+    build: ./ad-config
+    container_name: meridian-dc
+    hostname: MERIDIAN-DC01
+    environment:
+      DOMAIN:         "MERIDIAN"
+      REALM:          "MERIDIAN.LOCAL"
+      ADMIN_PASSWORD: "M3ridianAdm!n2024"
+      DC_IP:          "10.10.20.60"
+    ports:
+      - "389:389"                     # LDAP
+      - "88:88"                       # Kerberos
+      - "1445:445"                     # SMB
+      - "464:464"                     # kpasswd
+    volumes:
+      - meridian-ad-data:/var/lib/samba
+    networks:
+      meridian-net:
+        ipv4_address: 10.10.20.60
+    restart: unless-stopped   # was unless-stopped; prevents crash-loop if provisioning fails
+    healthcheck:
+      test: ["CMD-SHELL", "samba-tool user list 2>/dev/null | grep -q a.reeves || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 180s
+
+networks:
+  meridian-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.20.0/24
+
+volumes:
+  meridian-ad-data:
+    driver: local
